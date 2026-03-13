@@ -19,6 +19,7 @@ logger = logging.getLogger(__name__)
 _SYNC_MSG_URL = "https://qyapi.weixin.qq.com/cgi-bin/kf/sync_msg"
 _SERVICE_STATE_GET_URL = "https://qyapi.weixin.qq.com/cgi-bin/kf/service_state/get"
 _SERVICE_STATE_TRANS_URL = "https://qyapi.weixin.qq.com/cgi-bin/kf/service_state/trans"
+_SERVICER_ADD_URL = "https://qyapi.weixin.qq.com/cgi-bin/kf/servicer/add"
 
 # service_state constants
 _STATE_UNTOUCHED = 0  # 未处理
@@ -188,9 +189,11 @@ class KfClient:
         self,
         open_kfid: str,
         external_userid: str,
-        servicer_userid: str,
     ) -> bool:
-        """Ensure the session is in SERVING state before sending a message.
+        """Ensure the session is in a state where send_msg is allowed.
+
+        Transitions to state 1 (智能助手接待) which does **not** require a
+        ``servicer_userid``.  States 1 and 3 both allow send_msg.
 
         Returns ``True`` if the session is ready for send_msg, ``False`` otherwise.
         """
@@ -201,17 +204,66 @@ class KfClient:
                 external_userid,
             )
             result = self.trans_service_state(
-                open_kfid, external_userid, _STATE_SERVING, servicer_userid
+                open_kfid, external_userid, _STATE_SERVING
             )
             return result.get("errcode", -1) == 0
 
         current_state = state_data.get("service_state")
-        if current_state == _STATE_SERVING:
-            return True
-        if current_state == _STATE_HUMAN_SERVING:
+        if current_state in (_STATE_SERVING, _STATE_HUMAN_SERVING):
             return True
 
-        result = self.trans_service_state(
-            open_kfid, external_userid, _STATE_SERVING, servicer_userid
-        )
+        result = self.trans_service_state(open_kfid, external_userid, _STATE_SERVING)
+        return result.get("errcode", -1) == 0
+
+    def add_servicer(
+        self,
+        open_kfid: str,
+        userid_list: list[str],
+    ) -> dict[str, Any]:
+        """Register internal members as servicers on a KF account via API.
+
+        Required for API-managed accounts where the admin console is locked.
+        Servicers must be within the app's visibility range.
+        """
+        access_token = self.token_manager.get_token()
+        payload = {
+            "open_kfid": open_kfid,
+            "userid_list": userid_list,
+        }
+        try:
+            resp = requests.post(
+                _SERVICER_ADD_URL,
+                params={"access_token": access_token},
+                json=payload,
+                timeout=10,
+            )
+            resp.raise_for_status()
+            data: dict[str, Any] = resp.json()
+        except Exception:
+            logger.exception("servicer/add failed")
+            return {"errcode": -1}
+
+        if data.get("errcode", 0) != 0:
+            logger.error("servicer/add error: %s", data)
+        else:
+            logger.info("Registered servicers %s on %s", userid_list, open_kfid)
+        return data
+
+    def transfer_to_human(
+        self,
+        open_kfid: str,
+        external_userid: str,
+        servicer_userid: str = "",
+    ) -> bool:
+        """Transfer session to human agent.
+
+        If ``servicer_userid`` is provided, assigns directly (state 3).
+        Otherwise, puts user into the waiting pool (state 2).
+        """
+        if servicer_userid:
+            result = self.trans_service_state(
+                open_kfid, external_userid, _STATE_HUMAN_SERVING, servicer_userid
+            )
+        else:
+            result = self.trans_service_state(open_kfid, external_userid, _STATE_HUMAN)
         return result.get("errcode", -1) == 0

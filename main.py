@@ -130,7 +130,6 @@ def create_app() -> Flask:
                     if not kf_client.ensure_session_serving(
                         open_kfid=open_kfid,
                         external_userid=user_id,
-                        servicer_userid=config.KF_SERVICER_USERID,
                     ):
                         logger.error(
                             "Failed to transition session to SERVING for %s — "
@@ -149,10 +148,10 @@ def create_app() -> Flask:
                 )
 
                 if response.transfer_to_human and config.MESSAGE_MODE == "kf":
-                    kf_client.trans_service_state(
+                    kf_client.transfer_to_human(
                         open_kfid=open_kfid,
                         external_userid=user_id,
-                        service_state=2,
+                        servicer_userid=config.KF_SERVICER_USERID,
                     )
 
             except Exception:
