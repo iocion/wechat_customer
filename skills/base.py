@@ -19,6 +19,7 @@ class SkillResponse:
     next_state: Optional[str] = (
         None  # target SessionState name, e.g. "AWAITING_IDENTITY"
     )
+    transfer_to_human: bool = False
 
 
 class BaseSkill(ABC):

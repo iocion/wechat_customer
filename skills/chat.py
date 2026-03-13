@@ -47,7 +47,10 @@ class ChatSkill(BaseSkill):
         # Quick keyword check: transfer to human agent
         if content == _TRANSFER_KEYWORD:
             name = session.identity or "用户"
-            return SkillResponse(text=_TRANSFER_REPLY.format(name=name))
+            return SkillResponse(
+                text=_TRANSFER_REPLY.format(name=name),
+                transfer_to_human=True,
+            )
 
         # Build system prompt with user identity
         system_prompt = CUSTOMER_SERVICE_SYSTEM_PROMPT.format(

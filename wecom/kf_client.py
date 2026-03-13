@@ -17,6 +17,15 @@ from wecom.token_manager import TokenManager
 logger = logging.getLogger(__name__)
 
 _SYNC_MSG_URL = "https://qyapi.weixin.qq.com/cgi-bin/kf/sync_msg"
+_SERVICE_STATE_GET_URL = "https://qyapi.weixin.qq.com/cgi-bin/kf/service_state/get"
+_SERVICE_STATE_TRANS_URL = "https://qyapi.weixin.qq.com/cgi-bin/kf/service_state/trans"
+
+# service_state constants
+_STATE_UNTOUCHED = 0  # 未处理
+_STATE_SERVING = 1  # 由智能助手接待
+_STATE_HUMAN = 2  # 待接入池等待人工接待
+_STATE_HUMAN_SERVING = 3  # 由人工接待
+_STATE_CLOSED = 4  # 已结束/未开启
 
 
 class KfClient:
@@ -104,3 +113,105 @@ class KfClient:
         with self._lock:
             self._cursors[open_kfid] = cursor
             logger.debug("Updated cursor for %s: %s", open_kfid, cursor)
+
+    # -- Session state management --
+
+    def get_service_state(
+        self,
+        open_kfid: str,
+        external_userid: str,
+    ) -> dict[str, Any]:
+        """Query the current service_state for a KF session."""
+        access_token = self.token_manager.get_token()
+        payload = {
+            "open_kfid": open_kfid,
+            "external_userid": external_userid,
+        }
+        try:
+            resp = requests.post(
+                _SERVICE_STATE_GET_URL,
+                params={"access_token": access_token},
+                json=payload,
+                timeout=10,
+            )
+            resp.raise_for_status()
+            data: dict[str, Any] = resp.json()
+        except Exception:
+            logger.exception("service_state/get failed")
+            return {"errcode": -1}
+
+        if data.get("errcode", 0) != 0:
+            logger.error("service_state/get error: %s", data)
+        return data
+
+    def trans_service_state(
+        self,
+        open_kfid: str,
+        external_userid: str,
+        service_state: int,
+        servicer_userid: str = "",
+    ) -> dict[str, Any]:
+        """Transition a KF session to a new service_state."""
+        access_token = self.token_manager.get_token()
+        payload: dict[str, Any] = {
+            "open_kfid": open_kfid,
+            "external_userid": external_userid,
+            "service_state": service_state,
+        }
+        if servicer_userid:
+            payload["servicer_userid"] = servicer_userid
+
+        try:
+            resp = requests.post(
+                _SERVICE_STATE_TRANS_URL,
+                params={"access_token": access_token},
+                json=payload,
+                timeout=10,
+            )
+            resp.raise_for_status()
+            data: dict[str, Any] = resp.json()
+        except Exception:
+            logger.exception("service_state/trans failed")
+            return {"errcode": -1}
+
+        if data.get("errcode", 0) != 0:
+            logger.error("service_state/trans error: %s", data)
+        else:
+            logger.info(
+                "Session transitioned to state %d for %s",
+                service_state,
+                external_userid,
+            )
+        return data
+
+    def ensure_session_serving(
+        self,
+        open_kfid: str,
+        external_userid: str,
+        servicer_userid: str,
+    ) -> bool:
+        """Ensure the session is in SERVING state before sending a message.
+
+        Returns ``True`` if the session is ready for send_msg, ``False`` otherwise.
+        """
+        state_data = self.get_service_state(open_kfid, external_userid)
+        if state_data.get("errcode", -1) != 0:
+            logger.warning(
+                "Cannot read session state for %s — attempting blind transition",
+                external_userid,
+            )
+            result = self.trans_service_state(
+                open_kfid, external_userid, _STATE_SERVING, servicer_userid
+            )
+            return result.get("errcode", -1) == 0
+
+        current_state = state_data.get("service_state")
+        if current_state == _STATE_SERVING:
+            return True
+        if current_state == _STATE_HUMAN_SERVING:
+            return True
+
+        result = self.trans_service_state(
+            open_kfid, external_userid, _STATE_SERVING, servicer_userid
+        )
+        return result.get("errcode", -1) == 0

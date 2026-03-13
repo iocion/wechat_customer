@@ -34,6 +34,7 @@ class Config:
     # Message mode
     MESSAGE_MODE: str = os.getenv("MESSAGE_MODE", "kf")
     KF_OPEN_KFID: str = os.getenv("KF_OPEN_KFID", "")
+    KF_SERVICER_USERID: str = os.getenv("KF_SERVICER_USERID", "")
 
     # Required fields validation
     _REQUIRED = ("CORP_ID", "CORP_SECRET", "TOKEN", "ENCODING_AES_KEY", "GLM_API_KEY")

@@ -122,10 +122,22 @@ def create_app() -> Flask:
                 session_manager.update(session)
 
                 send_kwargs: dict = {}
+                open_kfid = ""
                 if config.MESSAGE_MODE == "kf":
-                    send_kwargs["open_kfid"] = (
-                        message.get("OpenKfId") or config.KF_OPEN_KFID
-                    )
+                    open_kfid = message.get("OpenKfId") or config.KF_OPEN_KFID
+                    send_kwargs["open_kfid"] = open_kfid
+
+                    if not kf_client.ensure_session_serving(
+                        open_kfid=open_kfid,
+                        external_userid=user_id,
+                        servicer_userid=config.KF_SERVICER_USERID,
+                    ):
+                        logger.error(
+                            "Failed to transition session to SERVING for %s — "
+                            "message will likely fail",
+                            user_id,
+                        )
+
                 else:
                     send_kwargs["agent_id"] = config.AGENT_ID
 
@@ -135,6 +147,13 @@ def create_app() -> Flask:
                     mode=config.MESSAGE_MODE,
                     **send_kwargs,
                 )
+
+                if response.transfer_to_human and config.MESSAGE_MODE == "kf":
+                    kf_client.trans_service_state(
+                        open_kfid=open_kfid,
+                        external_userid=user_id,
+                        service_state=2,
+                    )
 
             except Exception:
                 logger.exception("Message processing error")
