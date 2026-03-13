@@ -182,9 +182,12 @@ def create_app() -> Flask:
     return app
 
 
+# Create application instance for gunicorn
+application = create_app()
+
+
 if __name__ == "__main__":
     from config import Config
 
     cfg = Config()
-    application = create_app()
     application.run(host=cfg.SERVER_HOST, port=cfg.SERVER_PORT, debug=cfg.DEBUG)
