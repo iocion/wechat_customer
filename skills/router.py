@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING, Optional
 
-from skills.base import BaseSkill
+from skills.base import BaseSkill, SkillResponse
 
 if TYPE_CHECKING:
     from session.models import Session
@@ -43,6 +43,36 @@ class SkillRouter:
             )
             return self._default_skill
         return None
+
+    def route_chain(
+        self, message: dict, session: Session
+    ) -> list[tuple[BaseSkill, SkillResponse]]:
+        """执行技能链路由，处理 pass_through 技能，返回所有执行结果"""
+        results: list[tuple[BaseSkill, SkillResponse]] = []
+
+        for skill in self._skills:
+            if not skill.can_handle(message, session):
+                continue
+
+            logger.debug("Executing skill: %s", skill.name)
+            try:
+                response = skill.handle(message, session)
+                results.append((skill, response))
+
+                if not response.pass_through:
+                    return results
+            except Exception:
+                logger.exception("Skill '%s' error", skill.name)
+                continue
+
+        if not results and self._default_skill:
+            try:
+                response = self._default_skill.handle(message, session)
+                results.append((self._default_skill, response))
+            except Exception:
+                logger.exception("Default skill error")
+
+        return results
 
     def get_skill(self, name: str) -> Optional[BaseSkill]:
         """Look up a registered skill by name."""

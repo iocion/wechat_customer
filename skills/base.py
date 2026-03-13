@@ -16,10 +16,9 @@ class SkillResponse:
 
     text: str
     should_update_session: bool = True
-    next_state: Optional[str] = (
-        None  # target SessionState name, e.g. "AWAITING_IDENTITY"
-    )
+    next_state: Optional[str] = None
     transfer_to_human: bool = False
+    pass_through: bool = False  # True = 不发送响应，继续路由到下一个技能
 
 
 class BaseSkill(ABC):

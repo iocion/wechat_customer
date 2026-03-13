@@ -26,9 +26,12 @@ def create_app() -> Flask:
     from wecom.token_manager import TokenManager
     from wecom.message import MessageSender
     from wecom.kf_client import KfClient
-    from skills.base import SkillResponse
     from skills.router import SkillRouter
-    from skills.welcome import WelcomeSkill
+    from skills.greeting import GreetingSkill
+    from skills.stage_router import StageRouterSkill
+    from skills.pre_sales import PreSalesSkill
+    from skills.mid_sales import MidSalesSkill
+    from skills.post_sales import PostSalesSkill
     from skills.chat import ChatSkill
     from session.manager import SessionManager
     from session.models import SessionState
@@ -60,8 +63,13 @@ def create_app() -> Flask:
     )
 
     # -- Skill router --
+    # 优先级: Greeting(100) → StageRouter(90) → PreSales(40) → MidSales(30) → PostSales(20) → Chat(0)
     router = SkillRouter()
-    router.register(WelcomeSkill())
+    router.register(GreetingSkill())
+    router.register(StageRouterSkill(glm_client=glm_client))
+    router.register(PreSalesSkill(glm_client=glm_client))
+    router.register(MidSalesSkill(glm_client=glm_client))
+    router.register(PostSalesSkill(glm_client=glm_client))
     chat_skill = ChatSkill(glm_client=glm_client)
     router.register(chat_skill)
     router.set_default(chat_skill)
@@ -97,22 +105,18 @@ def create_app() -> Flask:
                     continue
 
                 session = session_manager.get_or_create(user_id)
-                skill = router.route(message, session)
-                if skill is None:
+
+                executed_skills = router.route_chain(message, session)
+                if not executed_skills:
                     logger.warning("No skill matched for user %s", user_id)
                     continue
 
-                logger.info("Routing user %s → skill '%s'", user_id, skill.name)
-
-                try:
-                    response: SkillResponse = skill.handle(message, session)
-                except Exception:
-                    logger.exception(
-                        "Skill '%s' error for user %s", skill.name, user_id
-                    )
-                    response = SkillResponse(
-                        text="抱歉，处理您的消息时出现了问题，请稍后再试。"
-                    )
+                _, response = executed_skills[-1]
+                logger.info(
+                    "Routing user %s → %s",
+                    user_id,
+                    [s.name for s, _ in executed_skills],
+                )
 
                 if response.next_state:
                     session.state = SessionState[response.next_state]
