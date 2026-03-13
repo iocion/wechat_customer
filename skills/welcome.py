@@ -39,13 +39,17 @@ class WelcomeSkill(BaseSkill):
         return 100  # highest — intercepts new / unidentified users
 
     def can_handle(self, message: dict, session: Session) -> bool:
+        # Skip if user already has identity (already welcomed before)
+        if session.identity:
+            return False
+
         # Handle text messages from NEW or AWAITING_IDENTITY sessions
         if message.get("MsgType") == "text" and session.state in (
             SessionState.NEW,
             SessionState.AWAITING_IDENTITY,
         ):
             return True
-        # Also handle enter_session events (customer opens chat window)
+        # Handle enter_session events for new users (customer opens chat window)
         if message.get("MsgType") == "event" and session.state == SessionState.NEW:
             return True
         return False

@@ -39,7 +39,10 @@ class ChatSkill(BaseSkill):
         return 0  # lowest — only triggers when nothing else matches
 
     def can_handle(self, message: dict, session: Session) -> bool:
-        return message.get("MsgType") == "text" and session.state == SessionState.ACTIVE
+        # Handle text messages from ACTIVE sessions, OR users with confirmed identity
+        if message.get("MsgType") != "text":
+            return False
+        return session.state == SessionState.ACTIVE or bool(session.identity)
 
     def handle(self, message: dict, session: Session) -> SkillResponse:
         content = (message.get("Content") or "").strip()
