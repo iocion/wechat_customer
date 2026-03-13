@@ -6,6 +6,7 @@ import logging
 import threading
 import time
 from queue import Queue
+from typing import Any
 
 from flask import Flask
 
@@ -66,7 +67,7 @@ def create_app() -> Flask:
     router.set_default(chat_skill)
 
     # -- Message queue --
-    message_queue: Queue[dict] = Queue()
+    message_queue: Queue[dict[str, Any]] = Queue()
 
     # Store in app.config so blueprints / handler can access them
     app.config["crypto"] = crypto
@@ -121,21 +122,22 @@ def create_app() -> Flask:
                 session.updated_at = time.time()
                 session_manager.update(session)
 
-                send_kwargs: dict = {}
+                send_kwargs: dict[str, Any] = {}
                 open_kfid = ""
                 if config.MESSAGE_MODE == "kf":
                     open_kfid = message.get("OpenKfId") or config.KF_OPEN_KFID
                     send_kwargs["open_kfid"] = open_kfid
 
-                    if not kf_client.ensure_session_serving(
+                    session_ready = kf_client.ensure_session_serving(
                         open_kfid=open_kfid,
                         external_userid=user_id,
-                    ):
-                        logger.error(
-                            "Failed to transition session to SERVING for %s — "
-                            "message will likely fail",
+                    )
+                    if not session_ready:
+                        logger.warning(
+                            "Session %s not in a sendable state — dropping reply",
                             user_id,
                         )
+                        continue
 
                 else:
                     send_kwargs["agent_id"] = config.AGENT_ID

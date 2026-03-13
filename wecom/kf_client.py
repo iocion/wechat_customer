@@ -36,6 +36,13 @@ class KfClient:
         self.token_manager = token_manager
         self._cursors: dict[str, str] = {}
         self._lock = threading.Lock()
+        self._session_locks: dict[str, threading.Lock] = {}
+
+    def _get_session_lock(self, external_userid: str) -> threading.Lock:
+        with self._lock:
+            if external_userid not in self._session_locks:
+                self._session_locks[external_userid] = threading.Lock()
+            return self._session_locks[external_userid]
 
     def sync_messages(
         self,
@@ -190,30 +197,54 @@ class KfClient:
         open_kfid: str,
         external_userid: str,
     ) -> bool:
-        """Ensure the session is in a state where send_msg is allowed.
+        """Ensure the session can accept a send_msg call.
 
-        Transitions to state 1 (智能助手接待) which does **not** require a
-        ``servicer_userid``.  States 1 and 3 both allow send_msg.
+        Valid send_msg states: 1 (智能助手) and 3 (人工接待).
+        Only state 0 can transition to state 1 without a servicer_userid.
+        States 2 (queue), 3 (human), 4 (ended) must NOT attempt 0→1 transition.
 
-        Returns ``True`` if the session is ready for send_msg, ``False`` otherwise.
+        Uses a per-user lock to prevent concurrent transitions for the same user
+        when multiple messages from the same sync_msg batch are processed in
+        parallel by the worker pool.
         """
-        state_data = self.get_service_state(open_kfid, external_userid)
-        if state_data.get("errcode", -1) != 0:
-            logger.warning(
-                "Cannot read session state for %s — attempting blind transition",
-                external_userid,
-            )
+        session_lock = self._get_session_lock(external_userid)
+        with session_lock:
+            state_data = self.get_service_state(open_kfid, external_userid)
+            if state_data.get("errcode", -1) != 0:
+                logger.warning(
+                    "Cannot read session state for %s — attempting blind transition",
+                    external_userid,
+                )
+                result = self.trans_service_state(
+                    open_kfid, external_userid, _STATE_SERVING
+                )
+                return result.get("errcode", -1) == 0
+
+            current_state = state_data.get("service_state")
+            logger.info("Session state for %s: %s", external_userid, current_state)
+
+            if current_state in (_STATE_SERVING, _STATE_HUMAN_SERVING):
+                return True
+
+            if current_state == _STATE_CLOSED:
+                logger.warning(
+                    "Session %s is ENDED (state 4) — cannot transition via API; "
+                    "WeChat resets to 0 only on next customer message",
+                    external_userid,
+                )
+                return False
+
+            if current_state == _STATE_HUMAN:
+                logger.warning(
+                    "Session %s is in human queue (state 2) — skipping bot reply",
+                    external_userid,
+                )
+                return False
+
             result = self.trans_service_state(
                 open_kfid, external_userid, _STATE_SERVING
             )
             return result.get("errcode", -1) == 0
-
-        current_state = state_data.get("service_state")
-        if current_state in (_STATE_SERVING, _STATE_HUMAN_SERVING):
-            return True
-
-        result = self.trans_service_state(open_kfid, external_userid, _STATE_SERVING)
-        return result.get("errcode", -1) == 0
 
     def add_servicer(
         self,
