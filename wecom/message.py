@@ -39,6 +39,9 @@ def parse_xml_message(xml_str: str) -> dict[str, Optional[str]]:
         "Event",
         "EventKey",
         "ChangeType",
+        # kf mode callback fields
+        "Token",
+        "OpenKfId",
     )
     root = ET.fromstring(xml_str)
     result: dict[str, Optional[str]] = {}

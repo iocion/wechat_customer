@@ -24,6 +24,7 @@ def create_app() -> Flask:
     from wecom.callback import callback_bp
     from wecom.token_manager import TokenManager
     from wecom.message import MessageSender
+    from wecom.kf_client import KfClient
     from skills.base import SkillResponse
     from skills.router import SkillRouter
     from skills.welcome import WelcomeSkill
@@ -48,6 +49,7 @@ def create_app() -> Flask:
         corp_secret=config.CORP_SECRET,
     )
     message_sender = MessageSender(token_manager=token_manager)
+    kf_client = KfClient(token_manager=token_manager)
     session_manager = SessionManager()
 
     glm_client = GLMClient(
@@ -69,6 +71,7 @@ def create_app() -> Flask:
     # Store in app.config so blueprints / handler can access them
     app.config["crypto"] = crypto
     app.config["message_sender"] = message_sender
+    app.config["kf_client"] = kf_client
     app.config["session_manager"] = session_manager
     app.config["skill_router"] = router
     app.config["message_queue"] = message_queue
@@ -110,7 +113,6 @@ def create_app() -> Flask:
                         text="抱歉，处理您的消息时出现了问题，请稍后再试。"
                     )
 
-                # Update session state
                 if response.next_state:
                     session.state = SessionState[response.next_state]
                 if response.should_update_session and message.get("Content"):
@@ -119,10 +121,11 @@ def create_app() -> Flask:
                 session.updated_at = time.time()
                 session_manager.update(session)
 
-                # Send reply via WeChat Work API
                 send_kwargs: dict = {}
                 if config.MESSAGE_MODE == "kf":
-                    send_kwargs["open_kfid"] = config.KF_OPEN_KFID
+                    send_kwargs["open_kfid"] = (
+                        message.get("OpenKfId") or config.KF_OPEN_KFID
+                    )
                 else:
                     send_kwargs["agent_id"] = config.AGENT_ID
 
