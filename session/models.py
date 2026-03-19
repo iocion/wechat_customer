@@ -16,21 +16,15 @@ class SessionState(Enum):
     ENDED = "ended"
 
 
-# 用户阶段类型
 UserStage = Literal["unknown", "pre_sales", "mid_sales", "post_sales"]
 
 
 @dataclass
 class Session:
-    """Represents a single user conversation session.
-
-    扩展字段支持电商客服场景：
-    - stage: 用户当前所处阶段（售前/售中/售后）
-    - pending_issues: 待处理问题列表（售后归档）
-    - user_preferences: 用户偏好标签
-    """
+    """Represents a single user conversation session."""
 
     user_id: str
+    session_id: str = ""
     state: SessionState = SessionState.NEW
     identity: Optional[str] = None
     chat_history: list[dict[str, str]] = field(default_factory=list)
@@ -38,26 +32,22 @@ class Session:
     updated_at: float = field(default_factory=time.time)
     metadata: dict[str, Any] = field(default_factory=dict)
 
-    # === 电商客服扩展字段 ===
     stage: UserStage = "unknown"
     pending_issues: list[str] = field(default_factory=list)
     user_preferences: dict[str, Any] = field(default_factory=dict)
-    greeted: bool = False  # 是否已问候过，防止重复欢迎
-
-    # -- helpers --
+    greeted: bool = False
 
     def add_message(self, role: str, content: str) -> None:
-        """Append a message to chat history and bump updated_at."""
         self.chat_history.append({"role": role, "content": content})
         self.updated_at = time.time()
 
     def get_recent_history(self, max_turns: int = 20) -> list[dict[str, str]]:
-        """Return the last *max_turns* messages."""
         return self.chat_history[-max_turns:]
 
     def to_dict(self) -> dict[str, Any]:
         return {
             "user_id": self.user_id,
+            "session_id": self.session_id,
             "state": self.state.value,
             "identity": self.identity,
             "chat_history": self.chat_history,
@@ -74,6 +64,7 @@ class Session:
     def from_dict(cls, data: dict[str, Any]) -> Session:
         return cls(
             user_id=data["user_id"],
+            session_id=data.get("session_id", ""),
             state=SessionState(data["state"]),
             identity=data.get("identity"),
             chat_history=data.get("chat_history", []),
@@ -87,12 +78,10 @@ class Session:
         )
 
     def add_pending_issue(self, issue: str) -> None:
-        """归档售后问题"""
         if issue and issue not in self.pending_issues:
             self.pending_issues.append(issue)
             self.updated_at = time.time()
 
     def set_preference(self, key: str, value: Any) -> None:
-        """记录用户偏好"""
         self.user_preferences[key] = value
         self.updated_at = time.time()

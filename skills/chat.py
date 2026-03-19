@@ -5,7 +5,8 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING
 
-from ai.prompt_templates import GENERAL_CHAT_PROMPT
+from memory.context import ContextBuilder
+from prompts.builder import PromptBuilder
 from session.models import SessionState
 from skills.base import BaseSkill, SkillResponse
 
@@ -23,8 +24,14 @@ _ERROR_REPLY = "稍等，我处理一下~"
 class ChatSkill(BaseSkill):
     """兜底技能 - 处理未被其他技能匹配的对话"""
 
-    def __init__(self, glm_client: GLMClient) -> None:
+    def __init__(
+        self,
+        glm_client: GLMClient,
+        context_builder: ContextBuilder | None = None,
+    ) -> None:
         self.glm_client = glm_client
+        self.context_builder = context_builder or ContextBuilder()
+        self.prompt_builder = PromptBuilder()
 
     @property
     def name(self) -> str:
@@ -52,27 +59,25 @@ class ChatSkill(BaseSkill):
                 transfer_to_human=True,
             )
 
-        system_prompt = GENERAL_CHAT_PROMPT.format(
-            identity=session.identity or "朋友",
-            stage=self._stage_display(session.stage),
+        context = self.context_builder.build_context(
+            user_id=session.user_id,
+            session_id=session.session_id,
+            user_message=content,
+            stage=session.stage,
+        )
+
+        system_prompt = self.prompt_builder.build_for_stage(
+            stage=session.stage,
+            context=context,
         )
 
         try:
             reply = self.glm_client.chat_with_history(
                 system_prompt=system_prompt,
-                chat_history=session.get_recent_history(max_turns=10),
+                chat_history=context.get("chat_history", []),
                 user_message=content,
             )
             return SkillResponse(text=reply)
         except Exception:
             logger.exception("Chat AI failed for user %s", session.user_id)
             return SkillResponse(text=_ERROR_REPLY)
-
-    def _stage_display(self, stage: str) -> str:
-        stage_map = {
-            "unknown": "咨询中",
-            "pre_sales": "选购中",
-            "mid_sales": "已下单",
-            "post_sales": "售后中",
-        }
-        return stage_map.get(stage, "咨询中")

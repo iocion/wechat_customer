@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING, cast
 
-from ai.prompt_templates import STAGE_ANALYSIS_PROMPT
+from prompts.builder import PromptBuilder
 from session.models import SessionState, UserStage
 from skills.base import BaseSkill, SkillResponse
 
@@ -47,6 +47,7 @@ class StageRouterSkill(BaseSkill):
 
     def __init__(self, glm_client: GLMClient) -> None:
         self.glm_client = glm_client
+        self.prompt_builder = PromptBuilder()
 
     @property
     def name(self) -> str:
@@ -84,16 +85,14 @@ class StageRouterSkill(BaseSkill):
         return SkillResponse(text="", should_update_session=False, pass_through=True)
 
     def _detect_stage_fast(self, content: str, current_stage: UserStage) -> UserStage:
-        """基于关键词快速检测阶段"""
         for stage, keywords in STAGE_KEYWORDS.items():
             if any(kw in content for kw in keywords):
                 return cast(UserStage, stage)
         return current_stage if current_stage != "unknown" else "unknown"
 
     def _detect_stage_ai(self, content: str, current_stage: UserStage) -> UserStage:
-        """调用 AI 分析阶段（仅在关键词无法判断时使用）"""
         try:
-            prompt = STAGE_ANALYSIS_PROMPT.format(
+            prompt = self.prompt_builder.build_stage_analysis(
                 message=content,
                 current_stage=current_stage,
             )

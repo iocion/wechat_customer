@@ -5,7 +5,8 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING
 
-from ai.prompt_templates import MID_SALES_PROMPT
+from memory.context import ContextBuilder
+from prompts.builder import PromptBuilder
 from session.models import SessionState
 from skills.base import BaseSkill, SkillResponse
 
@@ -19,8 +20,14 @@ logger = logging.getLogger(__name__)
 class MidSalesSkill(BaseSkill):
     """售中跟进 - 订单查询、物流跟踪、消除疑虑"""
 
-    def __init__(self, glm_client: GLMClient) -> None:
+    def __init__(
+        self,
+        glm_client: GLMClient,
+        context_builder: ContextBuilder | None = None,
+    ) -> None:
         self.glm_client = glm_client
+        self.context_builder = context_builder or ContextBuilder()
+        self.prompt_builder = PromptBuilder()
 
     @property
     def name(self) -> str:
@@ -44,10 +51,22 @@ class MidSalesSkill(BaseSkill):
     def handle(self, message: dict, session: Session) -> SkillResponse:
         content = (message.get("Content") or "").strip()
 
+        context = self.context_builder.build_context(
+            user_id=session.user_id,
+            session_id=session.session_id,
+            user_message=content,
+            stage=session.stage,
+        )
+
+        system_prompt = self.prompt_builder.build_for_stage(
+            stage=session.stage,
+            context=context,
+        )
+
         try:
             reply = self.glm_client.chat_with_history(
-                system_prompt=MID_SALES_PROMPT,
-                chat_history=session.get_recent_history(max_turns=10),
+                system_prompt=system_prompt,
+                chat_history=context.get("chat_history", []),
                 user_message=content,
             )
             return SkillResponse(text=reply)

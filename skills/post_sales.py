@@ -5,7 +5,9 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING
 
-from ai.prompt_templates import POST_SALES_PROMPT
+from memory.context import ContextBuilder
+from memory.profile import UserProfileManager
+from prompts.builder import PromptBuilder
 from session.models import SessionState
 from skills.base import BaseSkill, SkillResponse
 
@@ -32,8 +34,16 @@ ISSUE_KEYWORDS = {
 class PostSalesSkill(BaseSkill):
     """售后安抚 - 共情安抚、问题归档、给出方案"""
 
-    def __init__(self, glm_client: GLMClient) -> None:
+    def __init__(
+        self,
+        glm_client: GLMClient,
+        context_builder: ContextBuilder | None = None,
+        profile_manager: UserProfileManager | None = None,
+    ) -> None:
         self.glm_client = glm_client
+        self.context_builder = context_builder or ContextBuilder()
+        self.prompt_builder = PromptBuilder()
+        self.profile_manager = profile_manager or UserProfileManager()
 
     @property
     def name(self) -> str:
@@ -59,10 +69,22 @@ class PostSalesSkill(BaseSkill):
 
         self._archive_issues(content, session)
 
+        context = self.context_builder.build_context(
+            user_id=session.user_id,
+            session_id=session.session_id,
+            user_message=content,
+            stage=session.stage,
+        )
+
+        system_prompt = self.prompt_builder.build_for_stage(
+            stage=session.stage,
+            context=context,
+        )
+
         try:
             reply = self.glm_client.chat_with_history(
-                system_prompt=POST_SALES_PROMPT,
-                chat_history=session.get_recent_history(max_turns=10),
+                system_prompt=system_prompt,
+                chat_history=context.get("chat_history", []),
                 user_message=content,
             )
             return SkillResponse(text=reply)
@@ -71,10 +93,12 @@ class PostSalesSkill(BaseSkill):
             return SkillResponse(text="我来帮你处理，稍等~")
 
     def _archive_issues(self, content: str, session: Session) -> None:
-        """自动识别并归档售后问题"""
         for keyword, issue_label in ISSUE_KEYWORDS.items():
             if keyword in content:
-                session.add_pending_issue(issue_label)
+                self.profile_manager.add_issue(
+                    user_id=session.user_id,
+                    issue={"type": issue_label, "content": content},
+                )
                 logger.info(
                     "Archived issue for user %s: %s", session.user_id, issue_label
                 )

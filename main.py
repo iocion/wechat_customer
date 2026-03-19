@@ -36,13 +36,14 @@ def create_app() -> Flask:
     from session.manager import SessionManager
     from session.models import SessionState
     from ai.glm_client import GLMClient
+    from storage.database import Database
+    from memory.context import ContextBuilder
+    from memory.profile import UserProfileManager
 
     app = Flask(__name__)
 
-    # -- Config --
     config = Config()
 
-    # -- Core components --
     crypto = WeChatCrypto(
         token=config.TOKEN,
         encoding_aes_key=config.ENCODING_AES_KEY,
@@ -62,22 +63,32 @@ def create_app() -> Flask:
         model=config.GLM_MODEL,
     )
 
-    # -- Skill router --
-    # 优先级: Greeting(100) → StageRouter(90) → PreSales(40) → MidSales(30) → PostSales(20) → Chat(0)
+    db = Database()
+    profile_manager = UserProfileManager(db)
+    context_builder = ContextBuilder(db=db, profile_manager=profile_manager)
+
     router = SkillRouter()
     router.register(GreetingSkill())
     router.register(StageRouterSkill(glm_client=glm_client))
-    router.register(PreSalesSkill(glm_client=glm_client))
-    router.register(MidSalesSkill(glm_client=glm_client))
-    router.register(PostSalesSkill(glm_client=glm_client))
-    chat_skill = ChatSkill(glm_client=glm_client)
+    router.register(
+        PreSalesSkill(glm_client=glm_client, context_builder=context_builder)
+    )
+    router.register(
+        MidSalesSkill(glm_client=glm_client, context_builder=context_builder)
+    )
+    router.register(
+        PostSalesSkill(
+            glm_client=glm_client,
+            context_builder=context_builder,
+            profile_manager=profile_manager,
+        )
+    )
+    chat_skill = ChatSkill(glm_client=glm_client, context_builder=context_builder)
     router.register(chat_skill)
     router.set_default(chat_skill)
 
-    # -- Message queue --
     message_queue: Queue[dict[str, Any]] = Queue()
 
-    # Store in app.config so blueprints / handler can access them
     app.config["crypto"] = crypto
     app.config["message_sender"] = message_sender
     app.config["kf_client"] = kf_client
@@ -85,17 +96,16 @@ def create_app() -> Flask:
     app.config["skill_router"] = router
     app.config["message_queue"] = message_queue
     app.config["app_config"] = config
+    app.config["database"] = db
+    app.config["context_builder"] = context_builder
 
-    # -- Register blueprints --
     app.register_blueprint(callback_bp)
 
-    # -- Background message worker --
     def _process_messages() -> None:
-        """Pull messages from the queue and dispatch to skills."""
         while True:
             try:
                 item = message_queue.get()
-                if item is None:  # poison pill
+                if item is None:
                     break
 
                 message = item["message"]
@@ -105,6 +115,16 @@ def create_app() -> Flask:
                     continue
 
                 session = session_manager.get_or_create(user_id)
+
+                db.get_or_create_user(user_id)
+                db.update_user_message_count(user_id)
+
+                session_data = db.get_active_session(user_id)
+                if not session_data:
+                    session_id = f"{user_id}_{int(time.time())}"
+                    db.create_session(session_id, user_id, "active")
+                else:
+                    session_id = session_data["session_id"]
 
                 executed_skills = router.route_chain(message, session)
                 if not executed_skills:
@@ -123,8 +143,14 @@ def create_app() -> Flask:
                 if response.should_update_session and message.get("Content"):
                     session.add_message("user", message["Content"])
                     session.add_message("assistant", response.text)
+
+                    db.add_chat_message(session_id, "user", message["Content"])
+                    db.add_chat_message(session_id, "assistant", response.text)
+
                 session.updated_at = time.time()
                 session_manager.update(session)
+
+                db.update_session(session_id, stage=session.stage)
 
                 send_kwargs: dict[str, Any] = {}
                 open_kfid = ""
@@ -165,7 +191,6 @@ def create_app() -> Flask:
             finally:
                 message_queue.task_done()
 
-    # Start 2 worker threads
     for i in range(2):
         t = threading.Thread(
             target=_process_messages, daemon=True, name=f"msg-worker-{i}"
@@ -173,20 +198,22 @@ def create_app() -> Flask:
         t.start()
         logger.info("Started worker thread: %s", t.name)
 
-    # -- Simple endpoints --
     @app.route("/health")
-    def health():  # type: ignore[no-untyped-def]
+    def health():
         return {"status": "ok", "skills": [s.name for s in router.skills]}
 
     @app.route("/")
-    def index():  # type: ignore[no-untyped-def]
+    def index():
         return {"service": "WeChat Work AI Customer Service", "status": "running"}
+
+    @app.route("/stats")
+    def stats():
+        return db.get_stats()
 
     logger.info("Application initialised — skills: %s", [s.name for s in router.skills])
     return app
 
 
-# Create application instance for gunicorn
 application = create_app()
 
 
